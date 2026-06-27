@@ -96,7 +96,7 @@ protected:
       STDOUT.print("Battery voltage: ");
       float v = battery();
       STDOUT.println(v);
-#ifdef ENABLE_AUDIO
+#if defined(ENABLE_AUDIO) && !defined(DISABLE_TALKIE)
       talkie.SayDigit((int)floorf(v));
       talkie.Say(spPOINT);
       talkie.SayDigit(((int)floorf(v * 10)) % 10);
@@ -117,9 +117,6 @@ protected:
     }
 #endif
     return false;
-  }
-  void Help() override {
-    STDOUT.println(" batt[ery[_voltage]] - show battery voltage");
   }
 private:
   float battery_now() {

@@ -15,5 +15,24 @@
 #define PONUA
 #endif
 
+#define NELEM(X) (sizeof(X)/sizeof((X)[0]))
+const char install_time[] = __DATE__ " " __TIME__
+#ifdef INSTALL_TIME_EXTRA
+  INSTALL_TIME_EXTRA
+#endif  
+  ;
+
+#ifdef DEBUG
+#define PROFFIEOS_ASSERT(X) do {					\
+  if (!(X)) {								\
+    interrupts();							\
+    if (!(X)) STDERR << "ASSERT " << #X << " FAILED @ " << __FILE__ << ":" << __LINE__ << "\n"; \
+    while(true);							\
+  }									\
+} while(0)
+#else
+#define PROFFIEOS_ASSERT(X) do {} while(0)
+#endif
+
 #endif
 

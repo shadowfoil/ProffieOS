@@ -13,6 +13,8 @@ using BladeEffectType = EffectType;
     HANDLED_FEATURE_DRAG = 1 << 3,
     HANDLED_FEATURE_MELT = 1 << 4,
     HANDLED_FEATURE_LIGHTNING_BLOCK = 1 << 5,
+    HANDLED_FEATURE_INTERACTIVE_PREON = 1 << 6,
+    HANDLED_FEATURE_INTERACTIVE_BLAST = 1 << 7,
   };
 
 #include "../styles/blade_style.h"
@@ -37,6 +39,8 @@ public:
   // Returns true if the blade is supposed to be on.
   // false while "turning off".
   virtual bool is_on() const = 0;
+
+  virtual bool is_powered() const = 0;
 
   // Return how many effects are in effect.
   virtual size_t GetEffects(BladeEffect** blade_effects) = 0;
@@ -87,6 +91,15 @@ HandledFeature BladeBase::handled_features_ = HANDLED_FEATURE_NONE;
 
 BladeEffect* last_detected_blade_effect = NULL;
 
+class SaveLastDetectedBladeEffectScoped {
+public:
+  SaveLastDetectedBladeEffectScoped() : last_detected_blade_effect_(last_detected_blade_effect) {}
+  ~SaveLastDetectedBladeEffectScoped() { last_detected_blade_effect = last_detected_blade_effect_; }
+private:
+  BladeEffect* last_detected_blade_effect_;
+};
+
+
 template<BladeEffectType effect>
 class OneshotEffectDetector {
 public:
@@ -95,6 +108,12 @@ public:
       case EFFECT_STAB:
 	BladeBase::HandleFeature(HANDLED_FEATURE_STAB);
 	break;
+      case EFFECT_INTERACTIVE_PREON:
+        BladeBase::HandleFeature(HANDLED_FEATURE_INTERACTIVE_PREON);
+        break;
+      case EFFECT_INTERACTIVE_BLAST:
+        BladeBase::HandleFeature(HANDLED_FEATURE_INTERACTIVE_BLAST);
+        break;
       default:
 	break;
     }

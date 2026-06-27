@@ -29,6 +29,7 @@ void SetupTimer(uint32_t instance) {
     
     stm32l4_timer_enable(&stm32l4_pwm[instance], divider -1, modulus -1, 0, NULL, NULL, 0);
     stm32l4_timer_start(&stm32l4_pwm[instance], false);
+
     if (instance != PWM_SYNC_INSTANCE)  {
       SetupTimer(PWM_SYNC_INSTANCE);
       // TIM16 cannot be synchronized in hardware, so let's do the best we can.
@@ -57,30 +58,6 @@ void TeardownTimer(uint32_t instance) {
   }
 }
 
-void LSanalogWriteSetup(uint32_t pin) {
-  // Handle the case the pin isn't usable as PIO
-  if (pin >= NUM_TOTAL_PINS || g_APinDescription[pin].GPIO == NULL) {
-    Serial.print("Analog Setup: NOT A PIN: ");
-    Serial.println(pin);
-    return;
-  }
-  
-  if (!(g_APinDescription[pin].attr & PIN_ATTR_PWM)) {
-    Serial.println("Analog Setup: Pin is not configured for PWM: ");
-    Serial.println(pin);
-    return;
-  }
-  uint32_t instance = g_APinDescription[pin].pwm_instance;
-  SetupTimer(instance);
-  stm32l4_timer_channel(&stm32l4_pwm[instance], g_APinDescription[pin].pwm_channel, 0, TIMER_CONTROL_PWM);
-  stm32l4_gpio_pin_configure(g_APinDescription[pin].pin, (GPIO_PUPD_NONE | GPIO_OSPEED_HIGH | GPIO_OTYPE_PUSHPULL | GPIO_MODE_ALTERNATE));
-}
-
-void LSanalogWriteTeardown(uint32_t pin) {
-  pinMode(pin, INPUT_ANALOG);
-  TeardownTimer(g_APinDescription[pin].pwm_instance);
-}
-
 void LSanalogWrite(uint32_t pin, int value) {
   TIM_TypeDef* TIM = stm32l4_pwm[g_APinDescription[pin].pwm_instance].TIM;
   value >>= 1;
@@ -97,7 +74,63 @@ void LSanalogWrite(uint32_t pin, int value) {
   }
 }
 
+void LSanalogWriteSetup(uint32_t pin) {
+  // Handle the case the pin isn't usable as PIO
+  if (pin >= NUM_TOTAL_PINS || g_APinDescription[pin].GPIO == NULL) {
+    Serial.print("Analog Setup: NOT A PIN: ");
+    Serial.println(pin);
+    return;
+  }
+  
+  if (!(g_APinDescription[pin].attr & PIN_ATTR_PWM)) {
+    Serial.println("Analog Setup: Pin is not configured for PWM: ");
+    Serial.println(pin);
+    return;
+  }
+  uint32_t instance = g_APinDescription[pin].pwm_instance;
+  SetupTimer(instance);
+  stm32l4_timer_channel(&stm32l4_pwm[instance], g_APinDescription[pin].pwm_channel, 0, TIMER_CONTROL_PWM);
+  // Wait for a complete cycle to make sure the internal state is clear before setting the output mode.
+  delayMicroseconds(1300); // 1.3ms
+  stm32l4_gpio_pin_configure(g_APinDescription[pin].pin, (GPIO_PUPD_NONE | GPIO_OSPEED_HIGH | GPIO_OTYPE_PUSHPULL | GPIO_MODE_ALTERNATE));
+}
+
+void LSanalogWriteTeardown(uint32_t pin) {
+  pinMode(pin, INPUT_ANALOG);
+  TeardownTimer(g_APinDescription[pin].pwm_instance);
+}
+
+
 };
+#elif defined(ESP32)
+// First some abstractions for controlling PWM pin
+
+#ifdef SOC_LEDC_SUPPORT_HS_MODE
+#define LEDC_CHANNELS           (SOC_LEDC_CHANNEL_NUM<<1)
+#else
+#define LEDC_CHANNELS           (SOC_LEDC_CHANNEL_NUM)
+#endif
+
+static int8_t po_pin_to_channel[SOC_GPIO_PIN_COUNT] = { 0 };
+static int po_cnt_channel = LEDC_CHANNELS;
+
+void LSanalogWriteSetup(uint32_t pin) {
+  if (po_pin_to_channel[pin] == 0) {
+    if (!po_cnt_channel) {
+      log_e("No more analogWrite channels available! You can have maximum %u", LEDC_CHANNELS);
+      return;
+    }
+    po_pin_to_channel[pin] = po_cnt_channel--;
+    ledcAttachPin(pin, po_cnt_channel);
+    ledcSetup(po_cnt_channel, 1000, 16);
+  }
+}
+void LSanalogWriteTeardown(uint32_t pin) {
+  ledcDetachPin(pin);
+}
+void LSanalogWrite(uint32_t pin, int value) {
+  ledcWrite(po_pin_to_channel[pin] - 1, value);
+}
 #elif defined(TEENSYDUINO)
 // First some abstractions for controlling PWM pin
 void LSanalogWriteSetup(uint32_t pin) {

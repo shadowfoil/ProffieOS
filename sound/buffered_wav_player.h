@@ -20,12 +20,12 @@ public:
   void Play(const char* filename) {
     MountSDCard();
     EnableAmplifier();
-    pause_ = true;
+    pause_.set(true);
     clear();
     wav.Play(filename);
     SetStream(&wav);
     scheduleFillBuffer();
-    pause_ = false;
+    pause_.set(false);
   }
 
   bool PlayInCurrentDir(const char* name) {
@@ -51,31 +51,45 @@ public:
     SaberBase::sound_number = current_file_id().GetFileNum();
   }
 
-  void PlayOnce(Effect* effect, float start = 0.0) {
+  void PlayOnce(Effect::FileID fileid, float start = 0.0) {
+    const Effect* effect = fileid.GetEffect();
     MountSDCard();
     EnableAmplifier();
     set_volume_now(volume_target() * effect->GetVolume() / 100);
     STDOUT << "unit = " << WhatUnit(this) << " vol = " << volume() << ", ";
 
-    pause_ = true;
+    pause_.set(true);
     clear();
     ResetStopWhenZero();
-    wav.PlayOnce(effect, start);
+    wav.PlayOnce(fileid, start);
     SetStream(&wav);
     // Fill up the buffer, if possible.
     while (!wav.eof() && space_available()) {
       scheduleFillBuffer();
     }
-    pause_ = false;
+    pause_.set(false);
     if (SaberBase::sound_length == 0.0 && effect->GetFollowing() != effect) {
       UpdateSaberBaseSoundInfo();
     }
   }
+  void PlayOnce(Effect* effect, float start = 0.0) {
+    PlayOnce(effect->RandomFile(), start);
+  }
   void PlayLoop(Effect* effect) { wav.PlayLoop(effect); }
 
-  void Stop() override {
-    pause_ = true;
+  // Do not call from interrupts!
+  void Stop() {
+#if 0
+    // Immediate stop is impossible for multithreaded implementations.
+    pause_.set(true);
     wav.Stop();
+#else
+    int v = volume_target();
+    set_fade_time(0.005);
+    FadeAndStop();
+    while (isPlaying()) delay(1);
+    set_volume_now(v);
+#endif    
     wav.Close();
     clear();
   }
@@ -91,10 +105,10 @@ public:
   }
   
   bool isPlaying() const {
-    return !pause_ && (wav.isPlaying() || buffered());
+    return !pause_.get() && (wav.isPlaying() || buffered());
   }
 
-  BufferedWavPlayer() {
+  BufferedWavPlayer() : pause_(true) {
     SetStream(&wav);
   }
 
@@ -102,16 +116,16 @@ public:
   // means that it will be low priority for reading.
   size_t space_available() const override {
     size_t ret = VolumeOverlay<BufferedAudioStream<AUDIO_BUFFER_SIZE_BYTES>>::space_available();
-    if (pause_ && ret) ret = 2; // still slightly higher than FromFileStyle<>
+    if (pause_.get() && ret) ret = 2; // still slightly higher than FromFileStyle<>
     return ret;
   }
 
   int read(int16_t* dest, int to_read) override {
-    if (pause_) return 0;
+    if (pause_.get()) return 0;
     return VolumeOverlay<BufferedAudioStream<AUDIO_BUFFER_SIZE_BYTES> >::read(dest, to_read);
   }
   bool eof() const override {
-    if (pause_) return true;
+    if (pause_.get()) return true;
     return VolumeOverlay<BufferedAudioStream<AUDIO_BUFFER_SIZE_BYTES> >::eof();
   }
 
@@ -129,7 +143,7 @@ public:
   uint32_t refs() const { return refs_; }
 
   void dump() {
-    STDOUT << " pause=" << pause_
+    STDOUT << " pause=" << pause_.get()
 	   << " buffered=" << buffered()
 	   << " wav.isPlaying()=" << wav.isPlaying()
 	   << "\n";
@@ -139,7 +153,7 @@ private:
   uint32_t refs_ = 0;
 
   PlayWav wav;
-  volatile bool pause_;
+  POAtomic<bool> pause_;
 };
 
 #endif

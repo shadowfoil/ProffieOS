@@ -5,6 +5,7 @@
 #include "quat.h"
 #include "saber_base.h"
 #include "extrapolator.h"
+#include "box_filter.h"
 
 // #define FUSE_SPEED
 
@@ -73,29 +74,48 @@ public:
     CHECK_NAN(gyro);
     if (clear) {
       gyro_extrapolator_.clear(gyro);
+      gyro_clash_filter_.clear(gyro);
     } else {
       gyro_extrapolator_.push(gyro);
+      gyro_clash_filter_.push(gyro);
     }
   }
   void DoAccel(const Vec3& accel, bool clear) {
     CHECK_NAN(accel);
     if (clear) {
       accel_extrapolator_.clear(accel);
+      accel_clash_filter_.clear(accel);
       down_ = accel;
+      last_clear_ = micros();
     } else {
       accel_extrapolator_.push(accel);
+      accel_clash_filter_.push(accel);
     }
   }
 
+#ifndef GYRO_STABILIZATION_TIME_MS
+#define GYRO_STABILIZATION_TIME_MS 64
+#endif
+
   void Loop() override {
+    uint32_t last_accel = accel_extrapolator_.last_time();
+    uint32_t last_gyro = gyro_extrapolator_.last_time();
     uint32_t now = micros();
-    if (!accel_extrapolator_.ready()) return;
-    if (!gyro_extrapolator_.ready()) return;
-    if (now - accel_extrapolator_.last_time() > 200000) return;
-    if (now - gyro_extrapolator_.last_time() > 200000) return;
+    if (!accel_extrapolator_.ready() ||
+	!gyro_extrapolator_.ready() ||
+	now - last_accel > 200000 ||
+	now - last_gyro > 200000 ||
+	now - last_clear_ < GYRO_STABILIZATION_TIME_MS * 1000) {
+      gyro_ = Vec3(0.0f);
+      accel_ = Vec3(0.0f);
+      swing_speed_ = 0.0f;
+      return;
+    }
 
     float delta_t = (now - last_micros_) / 1000000.0;
     last_micros_ = now;
+    // Update last_clear_ so we won't have wrap-around issues.
+    last_clear_ = now - GYRO_STABILIZATION_TIME_MS * 1000;
     CHECK_NAN(delta_t);
 
     accel_ = accel_extrapolator_.get(now);
@@ -218,6 +238,7 @@ public:
   float pov_angle() {
     return atan2f(down_.y, down_.x);
   }
+
 #if 1
   float swing_speed() {
     if (swing_speed_ < 0) {
@@ -286,6 +307,28 @@ public:
   Vec3 mss() { return mss_; }      // m/s/s (acceleration - down vector)
   Vec3 down() { return down_; }    // G/s/s (length should be close to 1.0)
 
+  // Meters per second per second
+  Vec3 clash_mss() {
+    return accel_clash_filter_.get() - down_;
+  }
+
+  // Meters per second per second
+  float gyro_clash_value() {
+#if 0    
+    static uint32_t last_printout=0;
+    if (millis() - last_printout > 1000) {
+      last_printout = millis();
+      STDOUT << "GYRO CLASH FILTER: "<< gyro_clash_filter_.get()
+	     << " XTRAPOLATOR: "<< gyro_extrapolator_.get(micros())
+	     << "\n";
+    }
+#endif    
+    // degrees per microsecond
+    float v = (gyro_clash_filter_.get() - gyro_extrapolator_.get(micros())).len();
+    // Translate into meters per second per second, assuming blade is one meter.
+    return v / 9.81;
+  }
+  
 #ifdef FUSE_SPEED
   Vec3 speed() { return speed_; }  // m/s
 #endif
@@ -294,6 +337,11 @@ public:
   float swing_accel() {
     Vec3 gyro_slope_ = gyro_slope();
     return sqrtf(gyro_slope_.z * gyro_slope_.z + gyro_slope_.y * gyro_slope_.y) * (M_PI / 180);
+  }
+
+  // Acceleration into twist (one direction) in degrees per second per second
+  float twist_accel() {
+    return gyro_slope().x;
   }
 
   void dump() {
@@ -317,9 +365,13 @@ public:
   bool ready() { return micros() - last_micros_ < 50000; }
 
 private:
+  uint32_t last_clear_ = 0;
   static const int filter_hz = 80;
+  static const int clash_filter_hz = 1600;
   Extrapolator<Vec3, ACCEL_MEASUREMENTS_PER_SECOND/filter_hz> accel_extrapolator_;
   Extrapolator<Vec3, GYRO_MEASUREMENTS_PER_SECOND/filter_hz> gyro_extrapolator_;
+  BoxFilter<Vec3, ACCEL_MEASUREMENTS_PER_SECOND/clash_filter_hz> accel_clash_filter_;
+  BoxFilter<Vec3, ACCEL_MEASUREMENTS_PER_SECOND/clash_filter_hz> gyro_clash_filter_;
 
 #ifdef FUSE_SPEED
   Vec3 speed_;

@@ -25,7 +25,7 @@
 |  Add the slashes to any that you are not using.                   |
 \*-----------------------------------------------------------------*/
 
-// #define CONFIG_FILE "config/YOUR_CONFIG_FILE_NAME_HERE.h"
+#define CONFIG_FILE "config/Paul_TYS_Master.h"
 
 // #define CONFIG_FILE "config/default_proffieboard_config.h"
 // #define CONFIG_FILE "config/default_v3_config.h"
@@ -42,6 +42,7 @@
 // #define CONFIG_FILE "config/teensy_audio_shield_micom.h"
 // #define CONFIG_FILE "config/proffieboard_v2_ob4.h"
 // #define CONFIG_FILE "config/testconfig.h"
+// #define CONFIG_FILE "config/test_bench_config.h"
 
 #ifdef CONFIG_FILE_TEST
 #undef CONFIG_FILE
@@ -79,6 +80,9 @@
 
 // #define ENABLE_DEBUG
 
+#ifdef KEEP_SAVEFILES_WHEN_PROGRAMMING
+#warning Your config file has KEEP_SAVEFILES_WHEN_PROGRAMMING in it. If you experience problems, please remove it and try again before asking for help. For more information, see: https://pod.hubbe.net/config/keeping-edits-when-uploading.html
+#endif
 
 //
 // OVERVIEW
@@ -224,13 +228,13 @@ SnoozeTouch snooze_touch;
 SnoozeBlock snooze_config(snooze_touch, snooze_digital, snooze_timer);
 #endif
 
-const char version[] = "$Id: ce12a06a1e236b5101ec60c950530a9a4719a74d $";
-const char install_time[] = __DATE__ " " __TIME__;
+const char version[] = "v7.7";
 
 #include "common/common.h"
 #include "common/state_machine.h"
 #include "common/monitoring.h"
 #include "common/stdout.h"
+#include "common/errors.h"
 
 Monitoring monitor;
 DEFINE_COMMON_STDOUT_GLOBALS;
@@ -308,7 +312,9 @@ uint64_t loop_cycles = 0;
 
 #include "common/loop_counter.h"
 
-#define NELEM(X) (sizeof(X)/sizeof((X)[0]))
+#if defined(ENABLE_SSD1306) || defined(INCLUDE_SSD1306)
+#define ENABLE_DISPLAY_CODE
+#endif
 
 #ifdef DOSFS_CONFIG_STARTUP_DELAY
 #define PROFFIEOS_SD_STARTUP_DELAY DOSFS_CONFIG_STARTUP_DELAY
@@ -401,6 +407,23 @@ const char* next_current_directory(const char* dir) {
   dir ++;
   if (!*dir) return NULL;
   return dir;
+}
+const char* last_current_directory() {
+  const char* ret = current_directory;
+  while (true) {
+    const char* tmp = next_current_directory(ret);
+    if (!tmp) return ret;
+    ret = tmp;
+  }
+}
+const char* previous_current_directory(const char* dir) {
+  if (dir == current_directory) return nullptr;
+  dir -= 2;
+  while (true) {
+    if (dir == current_directory) return current_directory;
+    if (!*dir) return dir + 1;
+    dir--;
+  }
 }
 
 #include "sound/sound.h"
@@ -514,6 +537,11 @@ struct is_same_type<T, T> { static const bool value = true; };
 #include "functions/increment.h"
 #include "functions/subtract.h"
 #include "functions/divide.h"
+#include "functions/isbetween.h"
+#include "functions/clamp.h"
+#include "functions/alt.h"
+#include "functions/volume_level.h"
+#include "functions/mod.h"
 
 // transitions
 #include "transitions/fade.h"
@@ -531,6 +559,9 @@ struct is_same_type<T, T> { static const bool value = true; };
 #include "transitions/extend.h"
 #include "transitions/center_wipe.h"
 #include "transitions/sequence.h"
+#include "transitions/blink.h"
+#include "transitions/doeffect.h"
+#include "transitions/loop.h"
 
 #include "styles/legacy_styles.h"
 //responsive styles
@@ -575,6 +606,10 @@ const char* GetSaveDir() {
 
 ArgParserInterface* CurrentArgParser;
 
+#define CONFIG_STYLES
+#include CONFIG_FILE
+#undef CONFIG_STYLES
+
 #define CONFIG_PRESETS
 #include CONFIG_FILE
 #undef CONFIG_PRESETS
@@ -588,6 +623,10 @@ ArgParserInterface* CurrentArgParser;
 #endif
 
 PROP_TYPE prop;
+
+#ifdef BLADE_ID_SCAN_MILLIS
+bool ScanBladeIdNow() { return prop.ScanBladeIdNow(); }
+#endif
 
 #if 0
 #include "scripts/test_motion_timeout.h"
@@ -687,13 +726,7 @@ class Commands : public CommandParser {
 
     return ret;
   }
-  bool Parse(const char* cmd, const char* e) override {
-#ifndef DISABLE_DIAGNOSTIC_COMMANDS
-    if (!strcmp(cmd, "help")) {
-      CommandParser::DoHelp();
-      return true;
-    }
-#endif    
+  bool Parse(const char* cmd, const char* e) override {   
 
 #ifdef ENABLE_SERIALFLASH
     if (!strcmp(cmd, "ls")) {
@@ -1067,9 +1100,9 @@ class Commands : public CommandParser {
 #endif
 
     if (!strcmp(cmd, "version")) {
-      STDOUT.println(version);
-      STDOUT.print("Installed: ");
-      STDOUT.println(install_time);
+      STDOUT << version
+      << "\n" CONFIG_FILE "\nprop: "  TOSTRING(PROP_TYPE)  "\nbuttons: " TOSTRING(NUM_BUTTONS) "\ninstalled: " 
+      << install_time << "\n";
       return true;
     }
     if (!strcmp(cmd, "reset")) {
@@ -1345,23 +1378,6 @@ class Commands : public CommandParser {
 
     return false;
   }
-
-  void Help() override {
-    STDOUT.println(" version - show software version");
-    STDOUT.println(" reset - restart software");
-#ifndef DISABLE_DIAGNOSTIC_COMMANDS    
-    STDOUT.println(" effects - list current effects");
-#endif    
-#ifdef ENABLE_SERIALFLASH
-    STDOUT.println("Serial Flash memory management:");
-    STDOUT.println("   ls, rm <file>, format, play <file>, effects");
-    STDOUT.println("To upload files: tar cf - files | uuencode x >/dev/ttyACM0");
-#endif
-#if defined(ENABLE_SD) && !defined(DISABLE_DIAGNOSTIC_COMMANDS)
-    STDOUT.println(" dir [directory] - list files on SD card.");
-    STDOUT.println(" sdtest - benchmark SD card");
-#endif
-  }
 };
 
 StaticWrapper<Commands> commands;
@@ -1369,7 +1385,7 @@ StaticWrapper<Commands> commands;
 #include "common/serial.h"
 
 
-#if defined(ENABLE_MOTION) || defined(ENABLE_SSD1306) || defined(INCLUDE_SSD1306)
+#if defined(ENABLE_MOTION) || defined(ENABLE_DISPLAY_CODE)
 #include "common/i2cdevice.h"
 I2CBus i2cbus;
 #endif
@@ -1377,8 +1393,12 @@ I2CBus i2cbus;
 #ifdef ENABLE_SSD1306
 #include "display/ssd1306.h"
 
+#ifndef DISPLAY_POWER_PINS
+#define DISPLAY_POWER_PINS PowerPINS<>
+#endif
+
 StandardDisplayController<128, uint32_t> display_controller;
-SSD1306Template<128, uint32_t> display(&display_controller);
+SSD1306Template<128, uint32_t, DISPLAY_POWER_PINS> display(&display_controller);
 #endif
 
 #ifdef INCLUDE_SSD1306
@@ -1432,7 +1452,7 @@ void setup() {
   digitalWrite(boosterPin, HIGH);
 #endif
 
-  Serial.begin(9600);
+  Serial.begin(115200);
 #if VERSION_MAJOR >= 4
   // TODO: Figure out if we need this.
   // Serial.blockOnOverrun(false);
@@ -1493,12 +1513,9 @@ void setup() {
   // Time to identify the blade.
   prop.FindBlade();
   SaberBase::DoBoot();
-#if defined(ENABLE_SD) && defined(ENABLE_AUDIO)
-  if (!sd_card_found) {
-    talkie.Say(talkie_sd_card_15, 15);
-    talkie.Say(talkie_not_found_15, 15);
-  }
-#endif // ENABLE_AUDIO && ENABLE_SD
+#if defined(ENABLE_SD)
+  if (!sd_card_found) ProffieOSErrors::sd_card_not_found();
+#endif // ENABLE_SD
 }
 
 #ifdef MTP_RX_ENDPOINT
@@ -1532,7 +1549,10 @@ void loop() {
   Looper::DoLoop();
 }
 
+
 #define CONFIG_BOTTOM
 #include CONFIG_FILE
 #undef CONFIG_BOTTOM
 
+#define PROFFIEOS_DEFINE_FUNCTION_STAGE
+#include "common/errors.h"

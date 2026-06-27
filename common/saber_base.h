@@ -37,7 +37,32 @@ extern SaberBase* saberbases;
     DEFINE_EFFECT(LOW_BATTERY)			\
     DEFINE_EFFECT(POWERSAVE)                    \
     DEFINE_EFFECT(BATTERY_LEVEL)                \
+    DEFINE_EFFECT(VOLUME_LEVEL)                 \
+    /* Allows style to turn blade ON for interactive effects if prop/style support, FAST_ON skips PREON. */          \
+    DEFINE_EFFECT(ON)                           \
     DEFINE_EFFECT(FAST_ON)                      \
+    DEFINE_EFFECT(QUOTE)			\
+    DEFINE_EFFECT(SECONDARY_IGNITION)		\
+    DEFINE_EFFECT(SECONDARY_RETRACTION)		\
+    /* Allows style to turn blade OFF for interactive effects if prop/style support, FAST_OFF skips POSTOFF. */          \
+    DEFINE_EFFECT(OFF)                          \
+    DEFINE_EFFECT(FAST_OFF)                     \
+    DEFINE_EFFECT(OFF_CLASH)                    \
+    DEFINE_EFFECT(NEXT_QUOTE)                   \
+    DEFINE_EFFECT(INTERACTIVE_PREON)            \
+    /* Triggers a Blaster sound to interact with and creates an EFFECT_BLAST if prop/style support. */          \
+    DEFINE_EFFECT(INTERACTIVE_BLAST)            \
+    DEFINE_EFFECT(TRACK)			\
+    DEFINE_EFFECT(BEGIN_BATTLE_MODE)            \
+    DEFINE_EFFECT(END_BATTLE_MODE)              \
+    DEFINE_EFFECT(BEGIN_AUTO_BLAST)             \
+    DEFINE_EFFECT(END_AUTO_BLAST)               \
+    /* Triggers the change for sets of sounds within the font from one alternative to another. */                \
+    DEFINE_EFFECT(ALT_SOUND)			\
+    /* Triggers an optional sound effect during transitions from within a style via TrDoEffect. */         \
+    DEFINE_EFFECT(TRANSITION_SOUND)		\
+    /* Toggles an optonal sound effect loop ON/OFF from within a style via TrDoEffect. */          \
+    DEFINE_EFFECT(SOUND_LOOP)                   \
     /* Blaster effects */                       \
     DEFINE_EFFECT(STUN)				\
     DEFINE_EFFECT(FIRE)				\
@@ -52,12 +77,31 @@ extern SaberBase* saberbases;
     DEFINE_EFFECT(UNJAM)			\
     DEFINE_EFFECT(PLI_ON)			\
     DEFINE_EFFECT(PLI_OFF)                      \
+    /* Mini game effects */                     \
+    DEFINE_EFFECT(GAME_START)                   \
+    DEFINE_EFFECT(GAME_ACTION1)                 \
+    DEFINE_EFFECT(GAME_ACTION2)                 \
+    DEFINE_EFFECT(GAME_CHOICE)                  \
+    DEFINE_EFFECT(GAME_RESPONSE1)               \
+    DEFINE_EFFECT(GAME_RESPONSE2)               \
+    DEFINE_EFFECT(GAME_RESULT1)                 \
+    DEFINE_EFFECT(GAME_RESULT2)                 \
+    DEFINE_EFFECT(GAME_WIN)                     \
+    DEFINE_EFFECT(GAME_LOSE)                    \
     /* user-definable effects */                \
     DEFINE_EFFECT(USER1)			\
     DEFINE_EFFECT(USER2)			\
     DEFINE_EFFECT(USER3)			\
     DEFINE_EFFECT(USER4)			\
-    DEFINE_EFFECT(USER5)
+    DEFINE_EFFECT(USER5)			\
+    DEFINE_EFFECT(USER6)			\
+    DEFINE_EFFECT(USER7)			\
+    DEFINE_EFFECT(USER8)                        \
+    /* ERRORS */                                \
+    DEFINE_EFFECT(SD_CARD_NOT_FOUND)            \
+    DEFINE_EFFECT(ERROR_IN_FONT_DIRECTORY)      \
+    DEFINE_EFFECT(ERROR_IN_BLADE_ARRAY)         \
+    DEFINE_EFFECT(FONT_DIRECTORY_NOT_FOUND)     \
 
 
 #define DEFINE_EFFECT(X) EFFECT_##X,
@@ -106,6 +150,7 @@ protected:
 public:
   enum OffType {
     OFF_NORMAL,
+    OFF_FAST,
     OFF_BLAST,
     OFF_IDLE,
     OFF_CANCEL_PREON,

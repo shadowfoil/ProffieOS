@@ -174,10 +174,15 @@ public:
   }
 
   virtual void On() {
+#ifdef ENABLE_AUDIO
     if (!CommonIgnition()) return;
     SaberBase::DoPreOn();
     on_pending_ = true;
     // Hybrid font will call SaberBase::TurnOn() for us.
+#else
+    // No sound means no preon.
+    FastOn();
+#endif    
   }
 
   void FastOn() {
@@ -411,7 +416,7 @@ public:
 #define WRAP_BLADE_SHORTERNER(N)
 #endif
 #define SET_BLADE_STYLE(N) do {                                         \
-    BladeStyle* tmp = style_parser.Parse(current_preset_.current_style##N.get()); \
+      BladeStyle* tmp = style_parser.Parse(current_preset_.GetStyle(N));  \
     WRAP_BLADE_SHORTERNER(N)                                            \
     current_config->blade##N->SetStyle(tmp);                            \
   } while (0);
@@ -539,9 +544,10 @@ public:
 
   // Measure and return the blade identifier resistor.
   float id() {
+    EnableBooster();
     BLADE_ID_CLASS_INTERNAL blade_id;
     float ret = blade_id.id();
-    STDOUT << "ID: " << ret << "\n";
+    STDERR << "ID: " << ret << "\n";
 #ifdef SPEAK_BLADE_ID
     talkie.Say(spI);
     talkie.Say(spD);
@@ -557,9 +563,7 @@ public:
     return ret;
   }
 
-  // Called from setup to identify the blade and select the right
-  // Blade driver, style and sound font.
-  void FindBlade() {
+  size_t FindBestConfig() {
     static_assert(NELEM(blades) > 0, "blades array cannot be empty");
     
     size_t best_config = 0;
@@ -575,8 +579,46 @@ public:
         }
       }
     }
-    STDOUT.print("blade= ");
-    STDOUT.println(best_config);
+    return best_config;
+  }
+
+#ifdef BLADE_ID_SCAN_MILLIS
+#ifndef SHARED_POWER_PINS
+#warning SHARED_POWER_PINS is recommended when using BLADE_ID_SCAN_MILLIS
+#endif
+  bool find_blade_again_pending_ = false;
+  uint32_t last_scan_id_ = 0;
+  bool ScanBladeIdNow() {
+    uint32_t now = millis();
+    if (now - last_scan_id_ > BLADE_ID_SCAN_MILLIS) {
+      last_scan_id_ = now;
+      size_t best_config = FindBestConfig();
+      if (current_config != blades + best_config) {
+	// We can't call FindBladeAgain right away because
+	// we're called from the blade. Wait until next loop() call.
+	find_blade_again_pending_ = true;
+      }
+      return true;
+    }
+    return false;
+  }
+    
+  // Must be called from loop()
+  void PollScanId() {
+    if (find_blade_again_pending_) {
+      find_blade_again_pending_ = false;
+      FindBladeAgain();
+    }
+  }
+#else
+  void PollScanId() {}
+#endif  
+
+  // Called from setup to identify the blade and select the right
+  // Blade driver, style and sound font.
+  void FindBlade() {
+    size_t best_config = FindBestConfig();
+    STDOUT << "blade = " << best_config << "\n";
     current_config = blades + best_config;
 
 #define ACTIVATE(N) do {     \
@@ -594,14 +636,8 @@ public:
     return;
 
 #if NUM_BLADES != 0
-
   bad_blade:
-    STDOUT.println("BAD BLADE");
-#ifdef ENABLE_AUDIO
-    talkie.Say(talkie_error_in_15, 15);
-    talkie.Say(talkie_blade_array_15, 15);
-#endif
-
+    ProffieOSErrors::error_in_blade_array();
 #endif
   }
 
@@ -636,16 +672,10 @@ public:
 #endif
   }
 
-  void WriteState(const char* filename) {
-    PathHelper fn(GetSaveDir(), filename);
-    savestate_.Write(fn);
-  }
-
   void SaveState(int preset) {
     STDOUT.println("Saving Current Preset");
     savestate_.preset = preset;
-    WriteState("curstate.tmp");
-    WriteState("curstate.ini");
+    savestate_.WriteToSaveDir("curstate");
   }
 
   SaveGlobalStateFile saved_global_state;
@@ -682,8 +712,7 @@ public:
 #ifdef SAVE_BLADE_DIMMING
     saved_global_state.dimming = SaberBase::GetCurrentDimming();
 #endif
-    saved_global_state.Write("global.tmp");
-    saved_global_state.Write("global.ini");
+    saved_global_state.WriteToRootDir("global");
 #endif
   }
 
@@ -708,6 +737,20 @@ public:
     FindBlade();
   }
 
+  bool CheckInteractivePreon() {
+    #define USES_INTERACTIVE_PREON(N) \
+    if (current_config->blade##N->current_style() && current_config->blade##N->current_style()->IsHandled(HANDLED_FEATURE_INTERACTIVE_PREON)) return true;
+    ONCEPERBLADE(USES_INTERACTIVE_PREON)
+    return false;
+  }
+
+  bool CheckInteractiveBlast() {
+    #define USES_INTERACTIVE_BLAST(N) \
+    if (current_config->blade##N->current_style() && current_config->blade##N->current_style()->IsHandled(HANDLED_FEATURE_INTERACTIVE_BLAST)) return true;
+    ONCEPERBLADE(USES_INTERACTIVE_BLAST)
+    return false;
+  }
+
   // Potentially called from interrupt!
   virtual void DoMotion(const Vec3& motion, bool clear) {
     fusor.DoMotion(motion, clear);
@@ -717,19 +760,36 @@ public:
   virtual void DoAccel(const Vec3& accel, bool clear) {
     fusor.DoAccel(accel, clear);
     accel_loop_counter_.Update();
-    Vec3 diff = (accel - fusor.down());
+    Vec3 diff = fusor.clash_mss();
     float v;
     if (clear) {
       accel_ = accel;
       diff = Vec3(0,0,0);
       v = 0.0;
     } else {
+#ifndef PROFFIEOS_DONT_USE_GYRO_FOR_CLASH
+      v = (diff.len() + fusor.gyro_clash_value()) / 2.0;
+#else      
       v = diff.len();
+#endif      
     }
+#if 0    
+    static uint32_t last_printout=0;
+    if (millis() - last_printout > 1000) {
+      last_printout = millis();
+      STDOUT << "ACCEL: " << accel
+	     << " diff: " << diff
+	     << " gyro: " << fusor.gyro_clash_value()
+	     << " v = " << v << "\n";
+    }
+#endif
     // If we're spinning the saber or if loud sounds are playing, 
     // require a stronger acceleration to activate the clash.
-    if (v > (CLASH_THRESHOLD_G + fusor.gyro().len() / 200.0) + 
-      (dynamic_mixer.audio_volume() * (AUDIO_CLASH_SUPPRESSION_LEVEL * 0.000001))) {    
+    if (v > (CLASH_THRESHOLD_G + fusor.gyro().len() / 200.0)
+#if defined(ENABLE_AUDIO) && defined(AUDIO_CLASH_SUPPRESSION_LEVEL)
+	+ (dynamic_mixer.audio_volume() * (AUDIO_CLASH_SUPPRESSION_LEVEL * 0.000001))
+#endif	
+      ) {    
       if ( (accel_ - fusor.down()).len2() > (accel - fusor.down()).len2() ) {
         diff = -diff;
       }
@@ -988,7 +1048,7 @@ public:
       if (current_style() && !current_style()->Charging()) {
         LowBatteryOff();
         if (millis() - last_beep_ > 15000) {  // (was 5000)
-          STDOUT << "Low battery: " << battery_monitor.battery() << " volts\n";
+	  STDOUT << "Low battery: " << battery_monitor.battery() << " volts\n";
           SaberBase::DoLowBatt();
           last_beep_ = millis();
         }
@@ -1031,6 +1091,7 @@ public:
       clash_pending_ = false;
       Clash2(pending_clash_is_stab_, pending_clash_strength_);
     }
+    PollScanId();
     CheckLowBattery();
 #ifdef ENABLE_AUDIO
     if (track_player_ && !track_player_->isPlaying()) {
@@ -1221,11 +1282,11 @@ public:
       return true;
     }
     if (!strcmp(cmd, "clash")) {
-      Clash(false, 10.0);
+      Clash2(false, 10.0);
       return true;
     }
     if (!strcmp(cmd, "stab")) {
-      Clash(true, 10.0);
+      Clash2(true, 10.0);
       return true;
     }
     if (!strcmp(cmd, "force")) {
@@ -1300,6 +1361,28 @@ public:
       beeper.Beep(0.5, 261.63 * 2);
       beeper.Beep(0.5, 130.81 * 2);
       beeper.Beep(1.0, 196.00 * 2);
+      return true;
+    }
+#endif
+#ifdef ENABLE_DEVELOPER_COMMANDS
+    if (!strcmp(cmd, "sd_card_not_found")) {
+      ProffieOSErrors::sd_card_not_found();
+      return true;
+    }
+    if (!strcmp(cmd, "font_directory_not_found")) {
+      ProffieOSErrors::font_directory_not_found();
+      return true;
+    }
+    if (!strcmp(cmd, "error_in_blade_array")) {
+      ProffieOSErrors::error_in_blade_array();
+      return true;
+    }
+    if (!strcmp(cmd, "error_in_font_directory")) {
+      ProffieOSErrors::error_in_font_directory();
+      return true;
+    }
+    if (!strcmp(cmd, "low_battery")) {
+      SaberBase::DoLowBatt();
       return true;
     }
 #endif
@@ -1440,12 +1523,11 @@ public:
 
 #define SET_STYLE_CMD(N)                             \
     if (!strcmp(cmd, "set_style" #N) && arg) {        \
-      current_preset_.current_style##N = mkstr(arg); \
+      current_preset_.current_style_[N-1] = mkstr(arg); \
       current_preset_.Save();                        \
       return true;                                   \
     }
     ONCEPERBLADE(SET_STYLE_CMD)
-
     if (!strcmp(cmd, "move_preset") && arg) {
       int32_t pos = strtol(arg, NULL, 0);
       current_preset_.SaveAt(pos);
@@ -1616,24 +1698,6 @@ public:
     }
 #endif
     return false;
-  }
-  void Help() override {
-    STDOUT.println(" clash - trigger a clash");
-    STDOUT.println(" on/off - turn saber on/off");
-    STDOUT.println(" force - trigger a force push");
-    STDOUT.println(" blast - trigger a blast");
-    STDOUT.println(" stab - trigger a stab");
-    STDOUT.println(" lock - begin/end lockup");
-    STDOUT.println(" lblock/lb - begin/end lightning block");
-    STDOUT.println(" melt - begin/end melt");
-#ifdef ENABLE_AUDIO
-    STDOUT.println(" pwd - print current directory");
-    STDOUT.println(" cd directory - change directory, and sound font");
-    STDOUT.println(" play filename - play file");
-    STDOUT.println(" next/prev font - walk through directories in alphabetical order");
-    STDOUT.println(" next/prev pre[set] - walk through presets.");
-    STDOUT.println(" beep - play a beep");
-#endif
   }
 
   virtual bool Event(enum BUTTON button, EVENT event) {

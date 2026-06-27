@@ -22,9 +22,10 @@ public:
   virtual int num_leds() const = 0;
   virtual Color8::Byteorder get_byteorder() const = 0;
   virtual void Enable(bool enable) = 0;
+  virtual int pin() const = 0;
 };
 
-#if VERSION_MAJOR >= 4
+#ifdef ARDUINO_ARCH_STM32L4
 
 // Common, size adjusted to ~2000 interrupts per second.
 DMAMEM uint32_t displayMemory[200];
@@ -32,23 +33,35 @@ DMAMEM uint32_t displayMemory[200];
 #define DefaultPinClass WS2811Pin
 #define ProffieOS_yield() armv7m_core_yield()
 
-#else
+#endif // STM32
 
+#ifdef TEENSYDUINO
 // Common
 DMAMEM int displayMemory[maxLedsPerStrip * 24 / 4 + 1];
-#ifndef USE_TEENSY4
+#ifdef USE_TEENSY4
+#include "teensy4_ws2811.h"
+#define DefaultPinClass OctopodWSPin
+#elif defined(TEENSYDUINO)
 #include "monopodws.h"
 #include "ws2811_serial.h"
 #define DefaultPinClass MonopodWSPin
-#else
-#include "teensy4_ws2811.h"
-#define DefaultPinClass OctopodWSPin
 #endif
 #define ProffieOS_yield() do { } while(0)
 
-#endif
-#include "spiled_pin.h"
+#endif  // TEENSYDUINO
 
+#ifdef ESP32
+#include "esp32_ws2811.h"
+#define DefaultPinClass RMTWSPin
+#define ProffieOS_yield() yield()
+#endif
+
+
+#ifndef DefaultPinClass
+#error WS2811 not supported on this board
+#endif
+
+#include "spiled_pin.h"
 
 void WS2811PIN::WaitUntilReadyForEndFrame() {
   while (!IsReadyForEndFrame()) ProffieOS_yield();
@@ -133,6 +146,9 @@ WS2811_Blade(WS2811PIN* pin,
   bool is_on() const override {
     return on_;
   }
+  bool is_powered() const override {
+    return powered_;
+  }
   void set(int led, Color16 c) override {
     Color16* pos = colors_ + led;
     if (colors_ >= color_buffer && colors_ < color_buffer + NELEM(color_buffer) &&
@@ -161,11 +177,13 @@ WS2811_Blade(WS2811PIN* pin,
     run_ = true;
     on_ = true;
     power_off_requested_ = false;
+    poweroff_delay_start_ = 0;
   }
   void SB_Effect2(BladeEffectType type, float location) override {
     AbstractBlade::SB_Effect2(type, location);
     run_ = true;
     power_off_requested_ = false;
+    poweroff_delay_start_ = 0;
   }
   void SB_Off(OffType off_type) override {
     TRACE(BLADE, "SB_Off");
@@ -206,9 +224,6 @@ WS2811_Blade(WS2811PIN* pin,
     return false;
   }
 
-  void Help() override {
-    STDOUT.println(" blade on/off - turn ws2811 blade on off");
-  }
   void PowerOff() {
     if (!poweroff_delay_start_) {
       poweroff_delay_start_ = millis();
@@ -219,6 +234,7 @@ WS2811_Blade(WS2811PIN* pin,
     Power(false);
     run_ = false;
     power_off_requested_ = false;
+    poweroff_delay_start_ = 0;
   }
 
 #define BLADE_YIELD() do {			\
@@ -236,6 +252,12 @@ protected:
       YIELD();
       if (!current_style_ || !run_) {
 	loop_counter_.Reset();
+#ifdef BLADE_ID_SCAN_MILLIS
+	if (pin_->pin() == bladeIdentifyPin && ScanBladeIdNow()) {
+	  pin_->Enable(powered_);
+	  SLEEP(1);
+	}
+#endif      
 	continue;
       }
       // Wait until it's our turn.
@@ -253,20 +275,31 @@ protected:
       colors_ = pin_->BeginFrame();
       
       allow_disable_ = false;
-      current_style_->run(this);
+      if (current_style_)
+	current_style_->run(this);
 
       if (!powered_) {
-	if (allow_disable_) continue;
+	if (allow_disable_) {
+	  run_ = false;
+	  continue;
+	}
 	Power(true);
       }
 
       while (!pin_->IsReadyForEndFrame()) BLADE_YIELD();
+#ifdef BLADE_ID_SCAN_MILLIS
+      if (pin_->pin() == bladeIdentifyPin && ScanBladeIdNow()) {
+	pin_->Enable(powered_);
+	SLEEP(1);
+	if (current_blade != this) goto retry;
+      }
+#endif      
       pin_->EndFrame();
       loop_counter_.Update();
 
       if (powered_ && allow_disable_) {
+	power_off_requested_ = true;
 	PowerOff();
-	run_ = false;
       }
     }
     STATE_MACHINE_END();
@@ -277,7 +310,7 @@ protected:
     STDERR << "stuck somewhere after: " << state_machine_.next_state_ << "\n";
   }
 #endif
-  
+
 private:
   // Loop should run.
   bool run_ = false;
@@ -296,7 +329,10 @@ private:
   PowerPinInterface* power_;
   WS2811PIN* pin_;
   Color16* colors_;
+
 };
+
+
 
 
 #ifndef WS2811_GBR

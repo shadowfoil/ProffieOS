@@ -185,6 +185,9 @@ public:
   bool is_on() const override {
     return on_;
   }
+  bool is_powered() const override {
+    return power_;
+  }
   void set(int led, Color16 c) override {
     leds_[led]->set(c);
   }
@@ -242,10 +245,6 @@ public:
 #endif      
     }
     return false;
-  }
-
-  void Help() override {
-    STDOUT.println(" blade on/off - turn simple blade on off");
   }
 
 protected:
